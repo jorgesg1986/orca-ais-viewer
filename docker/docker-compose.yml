@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgis/postgis:17-3.5-alpine
+    container_name: postgis_ais_viewer
+    environment:
+      POSTGRES_DB: ais
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgis_data:/var/lib/postgresql/data  # Persist data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  # --- Backend Service ---
+  backend:
+    build:
+      dockerfile: docker/Dockerfile
+      context: ..
+    container_name: backend_ais_viewer
+    depends_on:
+      - db
+    #network_mode: "host"
+    ports:
+      - "8088:8088"
+    environment:
+      - AISSTREAM_API_KEY=${AISSTREAM_API_KEY}
+      # These allow the backend to connect to the 'db' service
+      - DATABASE_URL=jdbc:postgresql://db:5432/ais
+      - DATABASE_USERNAME=postgres
+      - DATABASE_PASSWORD=postgres
+    restart: unless-stopped
+
+  # --- Frontend Service ---
+  frontend:
+    build:
+      context: ../frontend
+    container_name: frontend_ais_viewer
+    #network_mode: "host"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgis_data:
