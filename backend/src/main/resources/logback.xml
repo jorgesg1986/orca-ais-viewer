@@ -12,7 +12,6 @@
     </appender>
 
     <logger name="slick" level="ERROR" />
-    <logger name="org.apache.pekko.event.Logging" level="DEBUG" />
     <logger name="com.orca.ais.viewer.actors.ClientActor" level="INFO" />
     <logger name="com.orca.ais.viewer.actors.DbUpdater" level="ERROR" />
     <logger name="com.orca.ais.viewer.actors.AISRetriever" level="ERROR" />

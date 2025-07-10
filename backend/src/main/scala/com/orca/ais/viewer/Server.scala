@@ -16,12 +16,10 @@ import org.apache.pekko.http.scaladsl.server.Directives.path
 import org.apache.pekko.http.scaladsl.server.Route
 import org.apache.pekko.http.scaladsl.server.RouteConcatenation._
 import org.apache.pekko.stream.Materializer
-import slick.jdbc.PostgresProfile
 import slick.jdbc.PostgresProfile.api._
 
-import javax.sql.DataSource
 import scala.concurrent.duration.DurationInt
-import scala.util.{Failure, Success}
+import scala.util.{Failure, Success, Try}
 
 object Server {
 
@@ -42,18 +40,6 @@ object Server {
 
   def main(args: Array[String]): Unit = {
 
-    // Create 8 bounding boxes to cover the whole world
-    val boundingBoxes = List(
-      BoundingBox(-90, -180, 0, -90),
-      BoundingBox(-90, -90, 0, 0),
-      BoundingBox(-90, 0, 0, 90),
-      BoundingBox(-90, 90, 0, 180),
-      BoundingBox(90, -180, 0, -90),
-      BoundingBox(90, -90, 0, 0),
-      BoundingBox(90, 0, 0, 90),
-      BoundingBox(90, 90, 0, 180),
-    )
-
     val url = sys.env.getOrElse("DATABASE_URL", "jdbc:postgresql://localhost:5432/ais")
     val user = sys.env.getOrElse("DATABASE_USERNAME", "postgres")
     val password = sys.env.getOrElse("DATABASE_PASSWORD", "postgres")
@@ -73,9 +59,6 @@ object Server {
     val sentAisMessagesCounter = Counter
       .builder()
       .name("SentAISMessageCounter").build()
-    val receivedAisMessagesCounter = Counter
-      .builder()
-      .name("ReceivedAISMessageCounter").build()
     val messagesProcessedCounter = Counter
       .builder()
       .name("MessagesProcessedCounter").build()
@@ -85,9 +68,11 @@ object Server {
     val aisMessagesUpdatedCounter = Counter
       .builder()
       .name("AisMessagesUpdatedCounter").build()
-
-    registry.underlying.register(sentAisMessagesCounter)
+    val receivedAisMessagesCounter = Counter
+      .builder()
+      .name(s"ReceivedAISMessageCounter_total").build()
     registry.underlying.register(receivedAisMessagesCounter)
+    registry.underlying.register(sentAisMessagesCounter)
     registry.underlying.register(messagesProcessedCounter)
     registry.underlying.register(registeredClientActorsGauge)
     registry.underlying.register(aisMessagesUpdatedCounter)
@@ -95,7 +80,8 @@ object Server {
     val metricsRoute: Route = path("metrics")(metrics(registry))
 
     val rootBehavior = Behaviors.setup[Nothing] { context =>
-      val dbUpdater = context.spawn(DbUpdater(dbAccess, aisMessagesUpdatedCounter), "DbUpdaterActor")
+      val dbUpdaterBatchSize = context.system.settings.config.getInt("orca-ais-viewer.db-updater.batch")
+      val dbUpdater = context.spawn(DbUpdater(dbAccess, aisMessagesUpdatedCounter, dbUpdaterBatchSize), "DbUpdaterActor")
       val msgProcessor = context
         .spawn(
           behavior = MessageProcessor(MessageProcessorState(
@@ -110,9 +96,17 @@ object Server {
 
       val webSocketUri = actorSystem.settings.config.getString("orca-ais-viewer.aisstream.websocket-uri")
 
+      val concurrentConnectionsToAisstream =
+        Try(actorSystem.settings.config.getInt("orca-ais-viewer.aisstream.connections")).getOrElse(1)
+      val boundingBoxes = getBoundingBoxes(concurrentConnectionsToAisstream)
+
       boundingBoxes.zipWithIndex.foreach { case (boundingBox, idx) =>
+        val receivedAisMessagesPerBoxCounter = Counter
+          .builder()
+          .name(s"ReceivedAISMessageCounter_box_$idx").build()
+        registry.underlying.register(receivedAisMessagesPerBoxCounter)
         val supervisedClientActor = Behaviors
-          .supervise(AISRetriever.getActor(aisStreamApiKey, webSocketUri, boundingBox, receivedAisMessagesCounter))
+          .supervise(AISRetriever.getActor(aisStreamApiKey, webSocketUri, boundingBox, receivedAisMessagesCounter, receivedAisMessagesPerBoxCounter))
           .onFailure[Exception](
             SupervisorStrategy.restartWithBackoff(
               minBackoff = 1.second, // Wait 1 second before the first restart
@@ -142,5 +136,35 @@ object Server {
     }
     ActorSystem[Nothing](rootBehavior, "OrcaAISViewerPekkoHttpServer")
     //#server-bootstrapping
+  }
+
+  private def getBoundingBoxes(numberOfBoxes: Int): List[BoundingBox] = { numberOfBoxes match {
+    case 1 =>
+      List(BoundingBox(-90, -180, 90, 180))
+    case 4 =>
+      List(
+        BoundingBox(-90, -180, 0, 0),
+        BoundingBox(0, 0, 90, 180),
+        BoundingBox(90, -180, 0, 0),
+        BoundingBox(0, 0, -90, 180),
+      )
+    case 8 =>
+      List(
+        BoundingBox(-90, -180, 0, -90),
+        BoundingBox(-90, -90, 0, 0),
+        BoundingBox(-90, 0, 0, 90),
+        BoundingBox(-90, 90, 0, 180),
+        BoundingBox(90, -180, 0, -90),
+        BoundingBox(90, -90, 0, 0),
+        BoundingBox(90, 0, 0, 90),
+        BoundingBox(90, 90, 0, 180),
+      )
+    case _ =>
+      List(
+        BoundingBox(-90, -180, 90, -40),
+        BoundingBox(-90, -40, 90, 40),
+        BoundingBox(-90, 40, 90, 180),
+      )
+  }
   }
 }

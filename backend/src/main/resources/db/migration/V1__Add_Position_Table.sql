@@ -10,5 +10,6 @@ CREATE TABLE IF NOT EXISTS POSITION (
         "timestamp"   TIMESTAMP NOT NULL
 );
 
-CREATE INDEX "idx_position_location" ON public.POSITION USING GIST ("location");
-CREATE INDEX "idx_position_timestamp" ON public.POSITION ("timestamp");
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+CREATE INDEX IF NOT EXISTS "idx_position_location_timestamp" ON public.POSITION USING GIST ("location", "timestamp");

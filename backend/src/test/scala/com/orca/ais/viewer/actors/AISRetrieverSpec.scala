@@ -29,6 +29,7 @@ class AISRetrieverSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wi
   trait Context {
     val msgProcessorProbe: TestProbe[MessageProcessor.Command] = createTestProbe[MessageProcessor.Command]()
     val mockCounter: Counter = mock[Counter]
+    val secondMockCounter = mock[Counter]
     val mockWebSocketClient: AISRetriever.WebSocketClient = mock[AISRetriever.WebSocketClient]
 
     val apiKey = "test-api-key"
@@ -44,11 +45,13 @@ class AISRetrieverSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wi
     "processMessage: parse a TextMessage, increment counter, and forward to processor" in {
       val msgProcessorProbe = createTestProbe[MessageProcessor.Command]()
       val mockCounter = mock[Counter]
+      val secondMockCounter = mock[Counter]
 
-      val processFn = AISRetriever.processMessage(msgProcessorProbe.ref, mockCounter)
+      val processFn = AISRetriever.processMessage(msgProcessorProbe.ref, mockCounter, secondMockCounter)
       processFn(TextMessage.Strict(sampleAisJson))
 
       verify(mockCounter, times(1)).inc()
+      verify(secondMockCounter, times(1)).inc()
       val received = msgProcessorProbe.expectMessageType[Position]
       received.positionReport.MetaData.MMSI should be(123456789)
       received.positionReport.Message.PositionReport.Latitude should be(0.5)
@@ -57,11 +60,13 @@ class AISRetrieverSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wi
     "processMessage: parse a BinaryMessage and forward to processor" in {
       val msgProcessorProbe = createTestProbe[MessageProcessor.Command]()
       val mockCounter = mock[Counter]
+      val secondMockCounter = mock[Counter]
 
-      val processFn = AISRetriever.processMessage(msgProcessorProbe.ref, mockCounter)
+      val processFn = AISRetriever.processMessage(msgProcessorProbe.ref, mockCounter, secondMockCounter)
       processFn(BinaryMessage.Strict(ByteString.apply(sampleAisJson)))
 
       verify(mockCounter, times(1)).inc()
+      verify(secondMockCounter, times(1)).inc()
       msgProcessorProbe.expectMessageType[Position].positionReport.MetaData.MMSI should be(123456789)
     }
 
@@ -79,7 +84,7 @@ class AISRetrieverSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wi
   "AISRetriever's buildAISFlow" should {
     "emit an auth message and process incoming messages" in new Context {
       // Build the flow to be tested
-      val flow = AISRetriever.buildAISFlow(msgProcessorProbe.ref, apiKey, bbox, mockCounter)
+      val flow = AISRetriever.buildAISFlow(msgProcessorProbe.ref, apiKey, bbox, mockCounter, secondMockCounter)
 
       implicit val actorSystem: actor.ActorSystem =  testKit.internalSystem.classicSystem
 
@@ -100,6 +105,7 @@ class AISRetrieverSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wi
       val received = msgProcessorProbe.expectMessageType[Position]
       received.positionReport.MetaData.MMSI should be(123456789)
       verify(mockCounter, times(1)).inc()
+      verify(secondMockCounter, times(1)).inc()
 
       // 3. Cleanly shut down the stream probes
       pub.sendComplete()

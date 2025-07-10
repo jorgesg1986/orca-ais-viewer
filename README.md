@@ -25,6 +25,10 @@ Running the entire application stack is straightforward. The following commands 
 
    - Make sure the environment variable `AISSTREAM_API_KEY` is set to your AISStream API Key.
    - In case you want to increase the backend logging you can do so by modifying the file `backend/src/main/resources/logback.xml`.
+   - There are a couple of configuration options that can be tweaked in the backend although the defaults are working fine:
+     - orca-ais-viewer.db-updater.batch: Number of AIS messages to batch before updating them in the DB, currently 100.
+     - orca-ais-viewer.aisstream.connections: Number of connections to the aisstream.io service. Options are 1, 3, 4 and 8. 
+     Currently using 3 due to getting too many concurrent connections error with a higher connection number.
 
 2.  **Start the application**:
 
