@@ -5,11 +5,13 @@ import com.orca.ais.viewer.model.{AISStreamMessage, BoundingBoxWithAge, Position
 import com.orca.ais.viewer.utils.json.JsonSupport.PositionFormat
 import com.vividsolutions.jts.geom.{Coordinate, Envelope}
 import io.prometheus.metrics.core.metrics.Counter
-import org.apache.pekko.actor.typed.{ActorRef, Behavior}
+import org.apache.pekko.actor.typed.{ActorRef, Behavior, DispatcherSelector}
 import org.apache.pekko.actor.typed.scaladsl.{ActorContext, Behaviors}
 import org.apache.pekko.http.scaladsl.model.ws.{Message, TextMessage}
 import org.slf4j.LoggerFactory
 import spray.json.enrichAny
+
+import scala.concurrent.ExecutionContext
 
 object ClientActor {
 
@@ -28,25 +30,26 @@ object ClientActor {
                     sourceActor: ActorRef[Message],
                     aisMessagesCounter: Counter,
                     dataAccess: DbAccess,
+                    ec: ExecutionContext,
                   )
 
   def getClientActor(state: State): Behavior[Command] = beforeReady(state)
 
   // Discard AIS messages until we get a bounding box update from the front end
   private def beforeReady(state: State) = {
-    Behaviors.receive[Command] {
-      case (context, UpdateBoundingBox(boundingBox)) =>
-        processUpdateBoundingBox(state, context, boundingBox)
-      case (_, PoisonPill) =>
+    Behaviors.receiveMessage[Command] {
+      case UpdateBoundingBox(boundingBox) =>
+        processUpdateBoundingBox(state, boundingBox)
+      case PoisonPill =>
         Behaviors.stopped
-      case (_, _) =>
+      case _ =>
         Behaviors.same
     }
   }
 
   private def processMessages(state: State): Behaviors.Receive[Command] = {
-    Behaviors.receive[Command] {
-      case (_, CheckPosition(positionReport, timestampReceived)) =>
+    Behaviors.receiveMessage[Command] {
+      case CheckPosition(positionReport, timestampReceived) =>
         val position = positionReport.toModelPosition(timestampReceived)
         if (checkPositionIsInBoundingBox(state.envelope, position)) {
           try {
@@ -59,25 +62,26 @@ object ClientActor {
           }
         }
         Behaviors.same
-      case (context, UpdateBoundingBox(boundingBox)) =>
-        processUpdateBoundingBox(state, context, boundingBox)
-      case (_, PoisonPill) =>
+      case UpdateBoundingBox(boundingBox) =>
+        processUpdateBoundingBox(state, boundingBox)
+      case PoisonPill =>
         Behaviors.stopped
     }
   }
 
-  private def processUpdateBoundingBox(state: State, context: ActorContext[Command], boundingBox: BoundingBoxWithAge) = {
+  private def processUpdateBoundingBox(state: State, boundingBox: BoundingBoxWithAge) = {
+    val timestampReceivedRequest = System.currentTimeMillis()
     state.dataAccess
       .getAISInfoByLocationAndTimestamp(boundingBox)
       .map { existingVessels =>
-        logger.info("Sending {} messages to frontend", existingVessels.size)
-        val timestampReceived = System.currentTimeMillis()
+        if (existingVessels.nonEmpty)
+          logger.info("Sending {} messages to frontend", existingVessels.size)
         existingVessels.foreach { vesselPosition =>
-          state.aisMessagesCounter.inc()
-          val jsonMsg = vesselPosition.toModelPosition(timestampReceived).toJson.prettyPrint
+          val jsonMsg = vesselPosition.toModelPosition(timestampReceivedRequest).toJson.prettyPrint
           state.sourceActor ! TextMessage.Strict(jsonMsg)
         }
-      }(context.system.executionContext)
+        state.aisMessagesCounter.inc(existingVessels.size)
+      }(state.ec)
     processMessages(state.copy(
       boundingBox = Some(boundingBox),
       envelope = Some(new Envelope(boundingBox.lat1, boundingBox.lat2, boundingBox.long1, boundingBox.long2)),

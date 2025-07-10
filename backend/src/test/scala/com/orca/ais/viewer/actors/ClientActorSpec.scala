@@ -13,9 +13,8 @@ import org.mockito.MockitoSugar.mock
 import org.scalatest.wordspec.AnyWordSpecLike
 import spray.json._
 
-
 import java.time.Instant
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 
 class ClientActorSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike {
 
@@ -33,7 +32,8 @@ class ClientActorSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike {
       envelope = None,
       sourceActor = sourceActorProbe.ref,
       aisMessagesCounter = mockCounter,
-      dataAccess = mockDbAccess
+      dataAccess = mockDbAccess,
+      ec = ExecutionContext.global,
     )
 
     val clientActor: ActorRef[Command] = spawn(getClientActor(initialState))

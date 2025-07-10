@@ -41,8 +41,9 @@ object Routes {
                            )
     : (ActorRef[Message], ActorRef[ClientActor.Command]) = {
     val actorsUUID = UUID.randomUUID()
+    val ec = actorSystem.dispatchers.lookup(DispatcherSelector.fromConfig("orca-ais-viewer.client-box-dispatcher"))
     val clientActor = actorSystem.systemActorOf(
-      behavior = ClientActor.getClientActor(ClientActor.State(None, None, sourceActor, counter, dbAccess)),
+      behavior = ClientActor.getClientActor(ClientActor.State(None, None, sourceActor, counter, dbAccess, ec)),
       name = s"ClientActor$actorsUUID",
       props = DispatcherSelector.fromConfig("orca-ais-viewer.client-dispatcher")
     )

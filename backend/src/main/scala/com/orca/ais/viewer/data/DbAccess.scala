@@ -1,10 +1,10 @@
 package com.orca.ais.viewer.data
 
-import com.orca.ais.viewer.data.OrcaPostgresProfile.api.{geometryColumnExtensionMethods, geometryTypeMapper, makeBox, makeEnvelope, makePoint, pointTypeMapper}
-import com.orca.ais.viewer.model.{BoundingBox, BoundingBoxWithAge}
+import com.orca.ais.viewer.data.OrcaPostgresProfile.api._
+import com.orca.ais.viewer.model.BoundingBoxWithAge
 import org.slf4j.LoggerFactory
 import slick.dbio.Effect
-import slick.jdbc.PostgresProfile.api._
+import slick.jdbc.PostgresProfile.api.Database
 import slick.sql.FixedSqlStreamingAction
 
 import java.time.Instant
@@ -14,9 +14,8 @@ class DbAccess(db: Database) {
   private val positions = TableQuery[PositionTable]
   private val logger = LoggerFactory.getLogger(classOf[DbAccess])
 
-  def upsertAISInfo(position: Position): Future[Int] = {
-    logger.debug(s"Upserting position: $position")
-    db.run(positions.insertOrUpdate(position))
+  def upsertAISInfo(positionList: List[Position]): Future[Option[Int]] = {
+    db.run(positions.insertOrUpdateAll(positionList))
   }
 
   def getAISInfoByLocationAndTimestamp(boundingBox: BoundingBoxWithAge, timestamp: Instant = Instant.now()): Future[Seq[Position]] = {

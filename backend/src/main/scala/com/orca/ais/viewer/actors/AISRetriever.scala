@@ -1,7 +1,7 @@
 package com.orca.ais.viewer.actors
 
 import com.orca.ais.viewer.actors.MessageProcessor.Position
-import com.orca.ais.viewer.model.{AISStreamMessage, AisstreamAuthMessage, BoundingBox}
+import com.orca.ais.viewer.model.{AISStreamMessage, AisstreamAuthMessage, BoundingBox, ErrorMessage}
 import io.prometheus.metrics.core.metrics.Counter
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.{ActorRef, ActorSystem, Behavior}
@@ -13,6 +13,7 @@ import spray.json._
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Future, Promise}
+import scala.util.Try
 
 object AISRetriever {
   import com.orca.ais.viewer.utils.json.JsonSupport._
@@ -24,56 +25,68 @@ object AISRetriever {
 
   private val logger = LoggerFactory.getLogger(classOf[AISRetriever.type])
 
-  def getActor(apiKey: String, webSocketUri: String, boundingBox: BoundingBox, counter: Counter)(implicit system: ActorSystem[_]): Behavior[Command] =
-    getActorWithWS(apiKey, webSocketUri, boundingBox, counter, Http().singleWebSocketRequest(_, _))
+  def getActor(apiKey: String, webSocketUri: String, boundingBox: BoundingBox, totalCounter: Counter, singleCounter: Counter)(implicit system: ActorSystem[_]): Behavior[Command] =
+    getActorWithWS(apiKey, webSocketUri, boundingBox, totalCounter, singleCounter, Http().singleWebSocketRequest(_, _))
 
   private[actors] def getActorWithWS(
                                 apiKey: String,
                                 webSocketUri: String,
                                 boundingBox: BoundingBox,
-                                counter: Counter,
+                                totalCounter: Counter,
+                                singleCounter: Counter,
                                 webSocketClient: WebSocketClient
                               ): Behavior[Command] = {
     Behaviors.receiveMessage {
       case RetrieveGeometry(msgProcessor) =>
         val request = WebSocketRequest(webSocketUri)
-        val flowProcessor = buildAISFlow(msgProcessor, apiKey, boundingBox, counter)
-        val result: (Future[WebSocketUpgradeResponse], Any) = webSocketClient(request, flowProcessor)
+        val flowProcessor = buildAISFlow(msgProcessor, apiKey, boundingBox, totalCounter, singleCounter)
+        webSocketClient(request, flowProcessor)
         Behaviors.same
     }
   }
 
-  //def getActor(boundingBox: BoundingBox, counter: Counter)(implicit system: ActorSystem[_]): Behavior[Command] = processAISData(boundingBox, counter)
-
-//  private def processAISData(boundingBox: BoundingBox, counter: Counter)(implicit system: ActorSystem[_]): Behavior[Command] = {
-//    Behaviors.receiveMessage {
-//      case RetrieveGeometry(msgProcessor) =>
-//        val request = WebSocketRequest(system.settings.config.getString("orca-ais-viewer.aisstream.websocket-uri"))
-//        val apiKey = System.getenv("AISSTREAM_API_KEY")
-//        val flowProcessor = buildAISFlow(msgProcessor, apiKey, boundingBox, counter)
-//        Http().singleWebSocketRequest(request, flowProcessor)
-//        Behaviors.same
-//    }
-//  }
-
-  private[actors] def processMessage(msgProcessor: ActorRef[MessageProcessor.Command], counter: Counter): Message => Unit = {
+  private[actors] def processMessage(
+                                      msgProcessor: ActorRef[MessageProcessor.Command],
+                                      totalCounter: Counter,
+                                      singleCounter: Counter,
+                                    ): Message => Unit = {
     case TextMessage.Strict(textMsg) =>
       logger.debug(s"Received text message: $textMsg")
-      counter.inc()
-      msgProcessor ! Position(JsonParser(textMsg).convertTo[AISStreamMessage])
+      processMessage(msgProcessor, totalCounter, singleCounter, textMsg)
     case BinaryMessage.Strict(binaryMsg) =>
       val strMsg = binaryMsg.utf8String
       logger.debug(s"Received binary message: $strMsg")
-      counter.inc()
-      msgProcessor ! Position(JsonParser(strMsg).convertTo[AISStreamMessage])
+      processMessage(msgProcessor, totalCounter, singleCounter, strMsg)
     case _ =>
       logger.error(s"Received unknown message type")
   }
 
-  private[actors] def buildAISFlow(msgProcessor: ActorRef[MessageProcessor.Command], apiKey: String, boundingBox: BoundingBox, counter: Counter)
+  def processMessage(msgProcessor: ActorRef[MessageProcessor.Command],
+                     totalCounter: Counter,
+                     singleCounter: Counter,
+                     msg: String): Unit = {
+    singleCounter.inc()
+    totalCounter.inc()
+    Try(Position(JsonParser(msg).convertTo[AISStreamMessage])).fold(
+      { _ =>
+        val errorMessage = JsonParser(msg).convertTo[ErrorMessage]
+        logger.error(s"Error: ${errorMessage.error}")
+      },
+      { position =>
+        msgProcessor ! position
+      })
+  }
+
+  private[actors] def buildAISFlow(
+                                    msgProcessor: ActorRef[MessageProcessor.Command],
+                                    apiKey: String,
+                                    boundingBox: BoundingBox,
+                                    totalCounter: Counter,
+                                    singleCounter: Counter,
+                                  )
   : Flow[Message, Message, Any] = {
     val res: Flow[Message, Message, Promise[Option[Message]]] = Flow.fromSinkAndSourceMat(
-      Sink.foreach[Message](processMessage(msgProcessor, counter)),
+      Sink.foreach[Message](processMessage(msgProcessor, totalCounter, singleCounter)),
       Source.tick(
           initialDelay = 0.seconds,
           interval = 30.seconds,
